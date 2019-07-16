@@ -62,7 +62,7 @@ class Configuration:
     :type ptr: bool
     """
 
-    def __init__(self, base_dir, config_json, clean_build=True, flatten=False):
+    def __init__(self, base_dir, config_json, clean_build=True, flatten=False, custom_src_dir = None, custom_dist_dir = None):
         """
         :type base_dir: str
         :type config_json: dict[str, str | bool]
@@ -78,6 +78,8 @@ class Configuration:
 
         self.clean_build = clean_build
         self.flatten = flatten
+        self.custom_src_dir = custom_src_dir
+        self.custom_dist_dir = custom_dist_dir
 
     def transcrypt_executable(self):
         """
@@ -104,37 +106,47 @@ class Configuration:
     @property
     def source_dir(self):
         """:rtype: str"""
-        if self.flatten:
-            return os.path.join(self.base_dir, 'src', '__py_build__')
+        if self.custom_src_dir:
+            if self.flatten:
+                return os.path.join(self.custom_src_dir, '__py_build__')
+            else:
+                return self.custom_src_dir
         else:
-            return os.path.join(self.base_dir, 'src')
+            if self.flatten:
+                return os.path.join(self.base_dir, 'src', '__py_build__')
+            else:
+                return os.path.join(self.base_dir, 'src')
 
 
-def load_config(base_dir):
+def load_config(base_dir, parse_arguments = True, custom_src_dir = None, custom_dist_dir = None):
     """
     Loads the configuration from the `config.json` file.
 
     :type base_dir: str
     :rtype: Configuration
     """
-    parser = ArgumentParser()
-    parser.add_argument("-c", "--config-file", type=str, default='config.json',
-                        help="file to load configuration from")
-    parser.add_argument("-d", "--dirty-build", action='store_true',
-                        help="if true, use past built files for files who haven't changed")
-    parser.add_argument("-e", "--expand-files", action='store_true',
-                        help="""Alternative to Transcrypt's -xpath option for \
-                        finding nested modules.  Use this option if Transcrypt \
-                        is unable to import nested .py files""")
-    args = parser.parse_args()
-
     config_file = os.path.join(base_dir, 'config.json')
 
     with open(os.path.join(base_dir, config_file)) as f:
         config_json = json.load(f)
 
-    return Configuration(base_dir, config_json, clean_build=not args.dirty_build, flatten=args.expand_files)
+    if parse_arguments:
+        parser = ArgumentParser()
+        parser.add_argument("-c", "--config-file", type=str, default='config.json',
+                            help="file to load configuration from")
+        parser.add_argument("-d", "--dirty-build", action='store_true',
+                            help="if true, use past built files for files who haven't changed")
+        parser.add_argument("-e", "--expand-files", action='store_true',
+                            help="""Alternative to Transcrypt's -xpath option for \
+                            finding nested modules.  Use this option if Transcrypt \
+                            is unable to import nested .py files""")
+        args = parser.parse_args()
 
+        return Configuration(base_dir, config_json, clean_build=not args.dirty_build, flatten=args.expand_files)
+
+    else:
+
+        return Configuration(base_dir, config_json, clean_build=True, flatten=False, custom_dist_dir=custom_dist_dir, custom_src_dir=custom_src_dir)
 
 def run_transcrypt(config):
     """
@@ -143,7 +155,7 @@ def run_transcrypt(config):
     :type config: Configuration
     """
     transcrypt_executable = config.transcrypt_executable()
-
+    print(f"Compiling main file {os.path.join(config.source_dir, 'main.py')}")
     source_main = os.path.join(config.source_dir, 'main.py')
 
     if config.clean_build:
@@ -166,7 +178,10 @@ def copy_artifacts(config):
 
     :type config: Configuration
     """
-    dist_directory = os.path.join(config.base_dir, 'dist')
+    if config.custom_dist_dir:
+        dist_directory = config.custom_dist_dir
+    else:
+        dist_directory = os.path.join(config.base_dir, 'dist')
 
     try:
         os.makedirs(dist_directory)
@@ -316,10 +331,26 @@ def install_env(config):
                 raise Exception("pip install failed. exit code: {}. command line '{}'. working dir: '{}'."
                                 .format(ret, "' '".join(install_args), config.base_dir))
 
+def build_from_process(source_dir, dist_dir, upload = False):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    config = load_config(base_dir, parse_arguments=False, custom_src_dir=source_dir, custom_dist_dir=dist_dir)
+
+    install_env(config)
+
+    if config.flatten:
+        expander_control = file_expander.FileExpander(base_dir)
+        expander_control.expand_files()
+
+    build(config)
+
+    if upload:
+        upload(config)
 
 def main():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     config = load_config(base_dir)
+    
     install_env(config)
 
     if config.flatten:
